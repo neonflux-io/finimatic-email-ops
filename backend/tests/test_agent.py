@@ -1,0 +1,696 @@
+from datetime import timedelta
+
+from app.core.time import utcnow
+from app.ai.schema import AIFailure
+from app.db.models import AgentSession, Contact, ConversationMessage, Draft, PendingEmailActionRow, Suppression
+from app.db.session import SessionLocal
+from app.audit.service import emit_event
+from conftest import configure_sender
+
+
+SESSION_A = "session-token-a"
+SESSION_B = "session-token-b"
+
+
+def _create_contact(client, *, email="sarah@example.com", name="Sarah"):
+    return client.post("/api/contacts", json={"email": email, "creator_name": name, "source": "manual"}).json()
+
+
+def _chat(client, message: str, *, session_token=SESSION_A):
+    return client.post("/api/agent/chat", json={"session_token": session_token, "message": message, "provider": "auto"}).json()
+
+
+def _pending_draft(client, monkeypatch, *, email="sarah@example.com", name="Sarah"):
+    monkeypatch.setenv("FINIMATIC_FAKE_AI", "1")
+    configure_sender(client, canary_verified=True, dry_run=False)
+    _create_contact(client, email=email, name=name)
+    response = _chat(client, f"generate a reply for {name}")
+    assert response["draft"]
+    assert response["pending_action"]
+    return response
+
+
+def test_capability_deny(client):
+    response = _chat(client, "delete every email in the inbox")
+
+    assert response["error_code"] == "capability_denied"
+    assert "cannot perform" in response["response"]
+
+
+def test_slot_missing(client):
+    response = _chat(client, "show thread")
+
+    assert response["is_clarification"] is True
+    assert response["error_code"] == "missing_slots"
+    assert "Which contact" in response["response"]
+
+
+def test_tool_read_inbox(client):
+    contact = _create_contact(client, email="reply-today@example.com", name="Reply Today")
+    client.post("/api/replies", json={"contact_id": contact["id"], "classified_as": "reply", "raw_summary": "Interested in the offer."})
+
+    response = _chat(client, "who replied today?")
+
+    assert "reply-today@example.com" in response["response"]
+    assert "Interested in the offer" in response["response"]
+    assert "evidence" not in response
+
+
+def test_tool_read_inbox_counts_contacts_today(client):
+    first = _create_contact(client, email="count-one@example.com", name="Count One")
+    second = _create_contact(client, email="count-two@example.com", name="Count Two")
+    client.post("/api/replies", json={"contact_id": first["id"], "classified_as": "reply", "raw_summary": "First reply."})
+    client.post("/api/replies", json={"contact_id": first["id"], "classified_as": "question", "raw_summary": "Second reply."})
+    client.post("/api/replies", json={"contact_id": second["id"], "classified_as": "reply", "raw_summary": "Third reply."})
+
+    response = _chat(client, "how many contacts replied today?")
+
+    assert response["intent"] == "email_read_inbox"
+    assert "2 contacts replied today" in response["response"]
+    assert "3 replies matched" in response["response"]
+    assert "First reply" not in response["response"]
+
+
+def test_agent_awareness_distinguishes_outbound_replies(client):
+    contact = _create_contact(client, email="outbound-awareness@example.com", name="Outbound Lead")
+    with SessionLocal() as db:
+        db.add(
+            ConversationMessage(
+                contact_id=contact["id"],
+                direction="outbound",
+                subject="Re: workflow",
+                body="Yes, I can walk you through it.",
+                source="manual_reply",
+                occurred_at=utcnow() - timedelta(hours=1),
+            )
+        )
+        db.commit()
+
+    response = _chat(client, "whom all have I replied in last 10 hours")
+
+    assert response["channel"] == "awareness"
+    assert "1 contact you replied to in the last 10 hours" in response["response"]
+    assert "Outbound Lead" in response["response"]
+    assert "You wrote" in response["response"]
+
+
+def test_tool_read_thread(client):
+    contact = _create_contact(client, email="thread@example.com", name="Thread Lead")
+    long_body = "x" * 260
+    with SessionLocal() as db:
+        from app.db.models import ConversationMessage
+
+        db.add(
+            ConversationMessage(
+                contact_id=contact["id"],
+                direction="inbound",
+                subject="Re: hello",
+                body=long_body,
+                source="test",
+                external_message_id="thread-1",
+                occurred_at=utcnow(),
+            )
+        )
+        db.commit()
+
+    response = _chat(client, "show Thread Lead's thread")
+
+    assert response["intent"] == "email_read_thread"
+    assert "thread@example.com" in response["response"]
+    assert "x" * 200 in response["response"]
+    assert "x" * 201 not in response["response"]
+    assert "evidence" not in response
+
+
+def test_agent_answers_most_recent_named_contact_message(client):
+    contact = _create_contact(client, email="educator@example.com", name="Data Science Educator")
+    other = _create_contact(client, email="coach@example.com", name="Career Coach Creator")
+    with SessionLocal() as db:
+        db.add(
+            ConversationMessage(
+                contact_id=contact["id"],
+                direction="inbound",
+                subject="Re: Python",
+                body="I am available Thursday or Friday afternoon IST for the Python chatbot call.",
+                source="imap",
+                occurred_at=utcnow(),
+            )
+        )
+        db.add(
+            ConversationMessage(
+                contact_id=other["id"],
+                direction="inbound",
+                subject="Re: Coaching",
+                body="Please remove me from your outreach.",
+                source="imap",
+                occurred_at=utcnow(),
+            )
+        )
+        db.commit()
+
+    response = _chat(client, "What did the data science educator say in their most recent message?")
+
+    assert response["intent"] == "email_read_thread"
+    assert "Thursday or Friday afternoon IST" in response["response"]
+    assert "remove me" not in response["response"].lower()
+
+
+def test_agent_answers_status_and_suppression_for_named_contact(client):
+    contact = _create_contact(client, email="coach-status@example.com", name="Career Coach Creator")
+    with SessionLocal() as db:
+        db_contact = db.get(Contact, contact["id"])
+        db_contact.status = "unsubscribed"
+        db.add(Suppression(email=contact["email"], reason="unsubscribe", source="reply"))
+        db.commit()
+
+    status = _chat(client, "What is the current status of the career coaching contact?")
+    suppressed = _chat(client, f"Is {contact['email']} currently suppressed?")
+
+    assert "asked to be removed" in status["response"]
+    assert "YES" in suppressed["response"]
+    assert "unsubscribe" in suppressed["response"]
+
+
+def test_agent_counts_autonomous_replies_last_two_hours(client):
+    contact = _create_contact(client, email="auto-count@example.com", name="Auto Count")
+    with SessionLocal() as db:
+        for index in range(2):
+            db.add(
+                ConversationMessage(
+                    contact_id=contact["id"],
+                    direction="outbound",
+                    subject=f"Re: {index}",
+                    body="Autonomous reply.",
+                    source="auto_reply",
+                    auto_sent=True,
+                    occurred_at=utcnow(),
+                )
+            )
+        db.commit()
+
+    response = _chat(client, "How many autonomous replies were sent in the last 2 hours?")
+
+    assert response["intent"] == "queue_status"
+    assert "2 autonomous replies" in response["response"]
+
+
+def test_agent_drafts_followup_from_thread_context(client, monkeypatch):
+    contact = _create_contact(client, email="educator-draft@example.com", name="Data Science Educator")
+    with SessionLocal() as db:
+        db.add(
+            ConversationMessage(
+                contact_id=contact["id"],
+                direction="inbound",
+                subject="Re: Python",
+                body="My Python students need course Q&A and I can talk Thursday afternoon IST.",
+                source="imap",
+                occurred_at=utcnow(),
+            )
+        )
+        db.commit()
+
+    async def fake_next_reply(db, contact, history, payload):
+        return {
+            "subject": "Re: Python course Q&A assistant",
+            "body": "Data Science Educator, based on the Python course Q&A thread and your Thursday afternoon IST availability, I can map the first chatbot scope around your course material. Would Thursday afternoon IST still work for a 20-minute scope call?\n\nBest regards\nRoss Dmello\nAI Systems Engineer",
+            "warnings": [],
+        }
+
+    monkeypatch.setattr("app.agent.tools._generate_next_reply", fake_next_reply)
+
+    response = _chat(client, "Draft a follow-up for the data science educator based on our conversation so far.")
+
+    assert response["draft"]
+    assert "Python course Q&A" in response["draft"]["body"]
+    assert "Thursday afternoon IST" in response["draft"]["body"]
+    assert "cohort" not in response["draft"]["body"].lower()
+
+
+def test_agent_continues_contact_clarification_for_main_one_response(client, monkeypatch):
+    contact = _create_contact(client, email="educator-main@example.com", name="Data Science Educator")
+    _create_contact(client, email="coach-main@example.com", name="Career Coach Creator")
+    with SessionLocal() as db:
+        db_contact = db.get(Contact, contact["id"])
+        db_contact.status = "replied"
+        db.add(
+            ConversationMessage(
+                contact_id=contact["id"],
+                direction="inbound",
+                subject="Re: Python course Q&A",
+                body="Can the assistant answer only from my Python course material and avoid generic answers?",
+                source="imap",
+                occurred_at=utcnow(),
+            )
+        )
+        db.commit()
+
+    async def fake_next_reply(db, contact, history, payload):
+        assert contact.email == "educator-main@example.com"
+        assert any("Python course material" in message.body for message in history)
+        return {
+            "subject": "Re: Python course Q&A",
+            "body": "Data Science Educator, yes. The assistant can stay grounded in your Python course material and route anything outside the course back to you.\n\nBest regards\nRoss Dmello\nAI Systems Engineer",
+            "warnings": [],
+        }
+
+    monkeypatch.setattr("app.agent.tools._generate_next_reply", fake_next_reply)
+
+    first = _chat(client, "generate a response", session_token="session-main-one")
+    second = _chat(client, "the main one", session_token="session-main-one")
+
+    assert first["is_clarification"] is True
+    assert "Which contact" in first["response"]
+    assert "Data Science Educator" in first["response"]
+    assert second["intent"] == "email_generate_draft"
+    assert second["draft"]
+    assert second["pending_action"]
+    assert "Python course material" in second["draft"]["body"]
+    assert "Total contacts" not in second["response"]
+
+
+def test_agent_main_one_uses_offered_candidate_not_global_guess(client, monkeypatch):
+    target = _create_contact(client, email="pending-candidate@example.com", name="Pending Candidate")
+    distractor = _create_contact(client, email="already-answered@example.com", name="Already Answered")
+    with SessionLocal() as db:
+        db.add(
+            ConversationMessage(
+                contact_id=target["id"],
+                direction="inbound",
+                subject="Re: Course bot",
+                body="Can the bot answer only from my uploaded course material?",
+                source="imap",
+                occurred_at=utcnow(),
+            )
+        )
+        db.add(
+            ConversationMessage(
+                contact_id=distractor["id"],
+                direction="inbound",
+                subject="Re: Old thread",
+                body="Can we talk?",
+                source="imap",
+                occurred_at=utcnow() - timedelta(minutes=10),
+            )
+        )
+        db.add(
+            ConversationMessage(
+                contact_id=distractor["id"],
+                direction="outbound",
+                subject="Re: Old thread",
+                body="Yes, I replied already.",
+                source="agent",
+                occurred_at=utcnow(),
+            )
+        )
+        db.commit()
+
+    async def fake_next_reply(db, contact, history, payload):
+        assert contact.email == "pending-candidate@example.com"
+        return {
+            "subject": "Re: Course bot",
+            "body": "Pending Candidate, yes. The bot can stay grounded in your uploaded course material.\n\nBest regards\nRoss Dmello",
+            "warnings": [],
+        }
+
+    monkeypatch.setattr("app.agent.tools._generate_next_reply", fake_next_reply)
+
+    first = _chat(client, "generate a response", session_token="session-offered-candidate")
+    second = _chat(client, "the main one", session_token="session-offered-candidate")
+
+    assert "Pending Candidate" in first["response"]
+    assert "Already Answered" not in first["response"]
+    assert second["draft"]
+    assert second["draft"]["to"] == "pending-candidate@example.com"
+
+
+def test_agent_ok_after_contact_clarification_does_not_guess(client):
+    first = _chat(client, "generate a response", session_token="session-ok-no-candidate")
+    second = _chat(client, "ok", session_token="session-ok-no-candidate")
+
+    assert first["is_clarification"] is True
+    assert second["is_clarification"] is True
+    assert second["draft"] is None
+    assert second["pending_action"] is None
+    assert "Which contact" in second["response"]
+    assert "Total contacts" not in second["response"]
+
+
+def test_agent_plain_ok_does_not_dump_campaign_snapshot(client):
+    response = _chat(client, "ok", session_token="session-plain-ok")
+
+    assert response["intent"] == "acknowledgement"
+    assert "Got it" in response["response"]
+    assert "Total contacts" not in response["response"]
+
+
+def test_agent_refuses_duplicate_response_when_latest_message_is_outbound(client):
+    contact = _create_contact(client, email="already-replied@example.com", name="Already Replied")
+    with SessionLocal() as db:
+        db.add(
+            ConversationMessage(
+                contact_id=contact["id"],
+                direction="inbound",
+                subject="Re: Python",
+                body="Can it answer from my course material?",
+                source="imap",
+                occurred_at=utcnow() - timedelta(minutes=5),
+            )
+        )
+        db.add(
+            ConversationMessage(
+                contact_id=contact["id"],
+                direction="outbound",
+                subject="Re: Python",
+                body="Yes, it can stay grounded in your course material.",
+                source="agent",
+                occurred_at=utcnow(),
+            )
+        )
+        db.commit()
+
+    response = _chat(client, "generate a response for Already Replied")
+
+    assert response["draft"] is None
+    assert response["pending_action"] is None
+    assert response["error_code"] == "no_pending_reply"
+    assert "already replied" in response["response"].lower()
+
+
+def test_agent_refuses_duplicate_draft_when_latest_message_is_outbound(client):
+    contact = _create_contact(client, email="already-drafted@example.com", name="Already Drafted")
+    with SessionLocal() as db:
+        db.add(
+            ConversationMessage(
+                contact_id=contact["id"],
+                direction="inbound",
+                subject="Re: Python",
+                body="Can it answer from my course material?",
+                source="imap",
+                occurred_at=utcnow() - timedelta(minutes=5),
+            )
+        )
+        db.add(
+            ConversationMessage(
+                contact_id=contact["id"],
+                direction="outbound",
+                subject="Re: Python",
+                body="Yes, it can stay grounded in your course material.",
+                source="agent",
+                occurred_at=utcnow(),
+            )
+        )
+        db.commit()
+
+    response = _chat(client, "generate a draft for Already Drafted")
+
+    assert response["draft"] is None
+    assert response["pending_action"] is None
+    assert response["error_code"] == "no_pending_reply"
+    assert "already replied" in response["response"].lower()
+
+
+def test_agent_ok_with_pending_draft_reminds_confirm_without_snapshot(client, monkeypatch):
+    pending = _pending_draft(client, monkeypatch, email="ok-pending@example.com", name="Ok Pending")
+
+    response = _chat(client, "ok")
+
+    assert pending["pending_action"]["action_id"]
+    assert response["error_code"] == "confirmation_required"
+    assert "Confirm" in response["response"]
+    assert "Total contacts" not in response["response"]
+    assert len(client.app.state.transport.sent) == 0
+
+
+def test_agent_pending_draft_status_mentions_confirmation(client, monkeypatch):
+    _pending_draft(client, monkeypatch, email="status-pending@example.com", name="Status Pending")
+
+    response = _chat(client, "did I reply back or is it pending")
+
+    assert response["intent"] == "email_read_thread"
+    assert "waiting for your confirmation" in response["response"]
+    assert "Confirm" in response["response"]
+    assert "Total contacts" not in response["response"]
+
+
+def test_agent_answers_contextual_reply_pending_for_active_contact(client):
+    contact = _create_contact(client, email="context-status@example.com", name="Data Science Educator")
+    with SessionLocal() as db:
+        db.add(
+            ConversationMessage(
+                contact_id=contact["id"],
+                direction="inbound",
+                subject="Re: Python grounding",
+                body="Can it answer only from my Python course material?",
+                source="imap",
+                occurred_at=utcnow(),
+            )
+        )
+        db.commit()
+
+    _chat(client, "show Data Science Educator's thread", session_token="session-context-status")
+    response = _chat(client, "did u reply him back or is it pending", session_token="session-context-status")
+
+    assert response["intent"] == "email_read_thread"
+    assert "still waiting for your response" in response["response"]
+    assert "Python course material" in response["response"]
+    assert "Total contacts" not in response["response"]
+
+
+def test_agent_help_question_returns_usage_not_campaign_snapshot(client):
+    response = _chat(client, "what can u do", session_token="session-help")
+
+    assert response["intent"] == "static_help"
+    assert "reply questions" in response["response"].lower()
+    assert "generate drafts" in response["response"].lower()
+    assert "Total contacts" not in response["response"]
+
+
+def test_confirmation_required(client):
+    configure_sender(client, canary_verified=True, dry_run=False)
+    response = _chat(client, "send it")
+
+    assert response["error_code"] == "confirmation_required"
+    assert len(client.app.state.transport.sent) == 0
+
+
+def test_confirmation_valid(client, monkeypatch):
+    pending = _pending_draft(client, monkeypatch)
+
+    sent = client.post("/api/agent/confirm", json={"session_token": SESSION_A, "action_id": pending["pending_action"]["action_id"]}).json()
+
+    assert sent["error_code"] is None
+    assert "Sent" in sent["response"]
+    assert len(client.app.state.transport.sent) == 1
+
+
+def test_confirmation_consumed(client, monkeypatch):
+    pending = _pending_draft(client, monkeypatch)
+    payload = {"session_token": SESSION_A, "action_id": pending["pending_action"]["action_id"]}
+
+    first = client.post("/api/agent/confirm", json=payload).json()
+    second = client.post("/api/agent/confirm", json=payload).json()
+
+    assert first["error_code"] is None
+    assert second["error_code"] == "consumed"
+    assert len(client.app.state.transport.sent) == 1
+
+
+def test_confirmation_expired(client, monkeypatch):
+    pending = _pending_draft(client, monkeypatch)
+    with SessionLocal() as db:
+        action = db.get(PendingEmailActionRow, pending["pending_action"]["action_id"])
+        action.expires_at = utcnow() - timedelta(seconds=1)
+        db.commit()
+
+    response = client.post("/api/agent/confirm", json={"session_token": SESSION_A, "action_id": pending["pending_action"]["action_id"]}).json()
+
+    assert response["error_code"] == "expired"
+    assert len(client.app.state.transport.sent) == 0
+
+
+def test_confirmation_session_mismatch(client, monkeypatch):
+    pending = _pending_draft(client, monkeypatch)
+
+    response = client.post("/api/agent/confirm", json={"session_token": SESSION_B, "action_id": pending["pending_action"]["action_id"]}).json()
+
+    assert response["error_code"] == "session_mismatch"
+    assert len(client.app.state.transport.sent) == 0
+
+
+def test_confirmation_draft_changed(client, monkeypatch):
+    pending = _pending_draft(client, monkeypatch)
+    with SessionLocal() as db:
+        draft = db.get(Draft, pending["draft"]["draft_id"])
+        draft.body = f"{draft.body}\nChanged after confirmation."
+        db.commit()
+
+    response = client.post("/api/agent/confirm", json={"session_token": SESSION_A, "action_id": pending["pending_action"]["action_id"]}).json()
+
+    assert response["error_code"] == "hash_mismatch"
+    assert len(client.app.state.transport.sent) == 0
+
+
+def test_confirmation_deleted_contact_is_cancelled(client, monkeypatch):
+    pending = _pending_draft(client, monkeypatch, email="delete-before-confirm@example.com", name="Sarah")
+    with SessionLocal() as db:
+        action = db.get(PendingEmailActionRow, pending["pending_action"]["action_id"])
+        contact_id = action.contact_id
+
+    assert client.delete(f"/api/contacts/{contact_id}").status_code == 200
+
+    response = client.post("/api/agent/confirm", json={"session_token": SESSION_A, "action_id": pending["pending_action"]["action_id"]}).json()
+
+    assert response["error_code"] == "consumed"
+    assert len(client.app.state.transport.sent) == 0
+
+
+def test_confirm_rejects_short_session_token(client, monkeypatch):
+    pending = _pending_draft(client, monkeypatch)
+
+    response = client.post("/api/agent/confirm", json={"session_token": "x", "action_id": pending["pending_action"]["action_id"]})
+
+    assert response.status_code == 422
+
+
+def test_cancel(client, monkeypatch):
+    pending = _pending_draft(client, monkeypatch)
+
+    cancelled = client.request("DELETE", "/api/agent/cancel", json={"session_token": SESSION_A}).json()
+    confirm_after_cancel = client.post("/api/agent/confirm", json={"session_token": SESSION_A, "action_id": pending["pending_action"]["action_id"]}).json()
+    event_types = [row["event_type"] for row in client.get("/api/audit").json()["items"]]
+
+    assert cancelled["response"] == "Cancelled. I did not send anything."
+    assert confirm_after_cancel["error_code"] == "consumed"
+    assert len(client.app.state.transport.sent) == 0
+    assert "agent.session_cancelled" in event_types
+
+
+def test_no_raw_key_in_response(client):
+    contact = _create_contact(client, email="secret-reply@example.com", name="Secret Reply")
+    client.post(
+        "/api/replies",
+        json={"contact_id": contact["id"], "classified_as": "reply", "raw_summary": "gsk_secret AIzaSecret app_password"},
+    )
+
+    response = _chat(client, "who replied today?")
+
+    assert "gsk_" not in str(response)
+    assert "AIza" not in str(response)
+    assert "app_password" not in str(response)
+
+
+def test_agent_response_omits_evidence_payload(client):
+    contact = _create_contact(client, email="evidence-hidden@example.com", name="Evidence Hidden")
+    client.post("/api/replies", json={"contact_id": contact["id"], "classified_as": "reply", "raw_summary": "Interested."})
+
+    response = _chat(client, "who replied today?")
+
+    assert "evidence" not in response
+
+
+def test_agent_long_message_preserves_tail_contact_identifier(client, monkeypatch):
+    monkeypatch.setenv("FINIMATIC_FAKE_AI", "1")
+    configure_sender(client, canary_verified=True, dry_run=False)
+    contact = _create_contact(client, email="long-tail@example.com", name="Long Tail")
+    message = "context " + ("x" * 5200) + " generate a reply for long-tail@example.com"
+
+    response = _chat(client, message)
+
+    assert response["draft"]["contact_id"] == contact["id"]
+    assert response["draft"]["to"] == "long-tail@example.com"
+    assert response["pending_action"]["action_id"]
+
+
+def test_agent_ai_failure_does_not_create_blank_draft(client, monkeypatch):
+    configure_sender(client, canary_verified=True, dry_run=False)
+    _create_contact(client, email="ai-fail@example.com", name="AI Fail")
+
+    async def fail_generate(self, contact, provider, tone, length):
+        return AIFailure(error_code="model_unavailable_rate_limited", provider=provider, detail="rate_limit")
+
+    monkeypatch.setattr("app.ai.gateway.AIGateway.generate_draft", fail_generate)
+
+    response = _chat(client, "generate a reply for ai-fail@example.com")
+
+    assert response["error_code"] == "model_unavailable_rate_limited"
+    assert response.get("draft") is None
+    assert "manual draft" in response["response"].lower() or "retry" in response["response"].lower()
+    with SessionLocal() as db:
+        assert db.query(Draft).count() == 0
+
+
+def test_expired_agent_session_reuses_token_without_integrity_error(client):
+    first = _chat(client, "queue status", session_token="session-token-expire")
+    assert first["intent"] == "queue_status"
+    with SessionLocal() as db:
+        session = db.query(AgentSession).one()
+        session.current_goal = "old goal"
+        session.expires_at = utcnow() - timedelta(minutes=31)
+        db.commit()
+
+    second = _chat(client, "queue status", session_token="session-token-expire")
+
+    assert second["intent"] == "queue_status"
+    assert second["error_code"] is None
+    with SessionLocal() as db:
+        sessions = db.query(AgentSession).all()
+        assert len(sessions) == 1
+        assert sessions[0].current_goal == "queue status"
+
+
+def test_audit_redacts_secret_like_values(client):
+    with SessionLocal() as db:
+        emit_event(
+            db,
+            "agent.security_test",
+            payload={
+                "message": "token=abc123secret gsk_liveSecret AIzaLiveSecret gAAAAabcdefghijklmnopqrstuvwxyz0123456789",
+                "nested": {"api_key": "plain-secret"},
+            },
+        )
+        db.commit()
+
+    payloads = [row["payload"] for row in client.get("/api/audit").json()["items"]]
+    rendered = str(payloads)
+
+    assert "gsk_" not in rendered
+    assert "AIza" not in rendered
+    assert "gAAAA" not in rendered
+    assert "abc123secret" not in rendered
+    assert "plain-secret" not in rendered
+
+
+def test_generate_draft_not_send(client, monkeypatch):
+    response = _pending_draft(client, monkeypatch)
+
+    assert response["draft"]["to"] == "sarah@example.com"
+    assert response["pending_action"]["action_id"]
+    assert len(client.app.state.transport.sent) == 0
+
+
+def test_agent_composes_explicit_certification_email_with_pending_confirm(client):
+    _create_contact(client, email="crce.9955.ce@gmail.com", name="Career Coach Creator")
+
+    response = _chat(
+        client,
+        "Compose and send a certification confirmation email to crce.9955.ce@gmail.com with subject: "
+        "Finimatic Certification Complete and body confirming that all dual-account, autonomous reply, "
+        "policy gate, and quality audit tests passed today with the current timestamp. "
+        "Sign it as Ross Dmello, AI Systems Engineer.",
+    )
+
+    assert response["intent"] == "email_generate_draft"
+    assert response["draft"]["to"] == "crce.9955.ce@gmail.com"
+    assert response["draft"]["subject"] == "Finimatic Certification Complete"
+    assert "All dual-account, autonomous reply, policy gate, and quality audit tests passed today at" in response["draft"]["body"]
+    assert "Ross Dmello\nAI Systems Engineer" in response["draft"]["body"]
+    assert response["pending_action"]["action_id"]
+    assert len(client.app.state.transport.sent) == 0
+
+
+def test_audit_written(client):
+    _chat(client, "queue status")
+
+    event_types = [row["event_type"] for row in client.get("/api/audit").json()["items"]]
+    assert "agent.goal_framed" in event_types
+    assert "agent.tool_executed" in event_types

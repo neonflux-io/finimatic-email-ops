@@ -1,0 +1,13 @@
+.env
+backend/.env
+*.db
+*.sqlite
+*.log
+__pycache__/
+.pytest_cache/
+.pytest-tmp/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+dist/
+KEYS.md

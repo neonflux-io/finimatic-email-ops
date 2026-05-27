@@ -1,0 +1,436 @@
+.va-shell {
+  --va-safe-right: calc(18px + env(safe-area-inset-right, 0px));
+  --va-safe-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  bottom: var(--va-safe-bottom);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none;
+  position: fixed;
+  right: var(--va-safe-right);
+  z-index: 80;
+}
+
+.va-shell > * {
+  pointer-events: auto;
+}
+
+.va-launcher {
+  align-items: center;
+  background: #0f766e;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.24);
+  color: #ffffff;
+  cursor: pointer;
+  display: inline-flex;
+  height: 58px;
+  justify-content: center;
+  position: relative;
+  width: 58px;
+}
+
+.va-unread {
+  align-items: center;
+  background: #dc2626;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 800;
+  height: 20px;
+  justify-content: center;
+  min-width: 20px;
+  padding: 0 5px;
+  position: absolute;
+  right: -2px;
+  top: -2px;
+}
+
+.va-attachment-note {
+  color: #64748b;
+  font-size: 11px;
+  margin-top: 6px;
+}
+
+.va-panel {
+  background: #ffffff;
+  border: 1px solid #d8dde6;
+  border-radius: 8px;
+  box-shadow: 0 26px 70px rgba(16, 19, 26, 0.24);
+  display: flex;
+  flex-direction: column;
+  height: min(680px, calc(100vh - 116px));
+  overflow: hidden;
+  width: min(430px, calc(100vw - 28px));
+}
+
+.va-shell.va-maximized .va-panel {
+  height: calc(100vh - 36px);
+  width: min(880px, calc(100vw - 36px));
+}
+
+.va-header {
+  align-items: flex-start;
+  border-bottom: 1px solid #e1e6ee;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.va-title {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.va-avatar {
+  align-items: center;
+  background: #111827;
+  border-radius: 8px;
+  color: #ffffff;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.va-name {
+  color: #10131a;
+  font-size: 0.92rem;
+  font-weight: 800;
+}
+
+.va-meta {
+  color: #5c6676;
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.va-actions,
+.va-composer-row,
+.va-draft-actions {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.va-icon-btn {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #cfd6e2;
+  border-radius: 6px;
+  color: #334155;
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.va-icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.va-history {
+  background: #f7f9fc;
+  border-bottom: 1px solid #e1e6ee;
+  display: grid;
+  gap: 8px;
+  max-height: 230px;
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+.va-history-top {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.va-history-item {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d8dde6;
+  border-radius: 6px;
+  color: #1f2937;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 38px;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.va-history-item.va-active {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
+}
+
+.va-history-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.va-history-select {
+  color: #1f2937;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.va-messages {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.va-message {
+  display: flex;
+}
+
+.va-message.va-user {
+  justify-content: flex-end;
+}
+
+.va-bubble {
+  border-radius: 8px;
+  font-size: 0.88rem;
+  line-height: 1.48;
+  max-width: 86%;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+}
+
+.va-assistant .va-bubble {
+  white-space: normal;
+}
+
+.va-formatted-message {
+  display: grid;
+  gap: 9px;
+}
+
+.va-formatted-message p {
+  margin: 0;
+}
+
+.va-message-lead {
+  color: #111827;
+  font-weight: 700;
+}
+
+.va-message-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.va-message-list li {
+  padding-left: 2px;
+}
+
+.va-message-list li::marker {
+  color: #0f766e;
+  font-weight: 800;
+}
+
+.va-message-list > li > span {
+  display: block;
+}
+
+.va-line-label,
+.va-list-name,
+.va-inline-bold {
+  color: #111827;
+  font-weight: 800;
+}
+
+.va-inline-email {
+  color: #475569;
+  display: inline;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.va-message-list small {
+  color: #4b5563;
+  display: block;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  margin-top: 3px;
+}
+
+.va-user .va-bubble {
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.va-assistant .va-bubble {
+  background: #f7f9fc;
+  border: 1px solid #e1e6ee;
+  color: #1f2937;
+}
+
+.va-attachment-line {
+  color: inherit;
+  font-size: 0.75rem;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.va-draft-card {
+  border: 1px solid #b8ddd6;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+}
+
+.va-draft-card strong {
+  color: #0f4f48;
+}
+
+.va-draft-body {
+  background: #ffffff;
+  border: 1px solid #d8dde6;
+  border-radius: 6px;
+  color: #253043;
+  max-height: 150px;
+  overflow: auto;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
+.va-draft-confirm-btn,
+.va-draft-cancel-btn {
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 800;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.va-draft-confirm-btn {
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.va-draft-cancel-btn {
+  background: #ffffff;
+  border: 1px solid #cfd6e2;
+  color: #1f2937;
+}
+
+.va-footer {
+  border-top: 1px solid #e1e6ee;
+  padding: 10px 12px;
+}
+
+.va-input-wrap {
+  border: 1px solid #cfd6e2;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.va-input-wrap.va-drag-over {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.va-input {
+  border: 0;
+  box-shadow: none;
+  min-height: 58px;
+  padding: 0;
+  resize: vertical;
+}
+
+.va-input:focus {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.va-attachment-preview {
+  align-items: center;
+  background: #f2f5fa;
+  border-radius: 6px;
+  color: #334155;
+  display: flex;
+  font-size: 0.78rem;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding: 7px 8px;
+}
+
+.va-composer-row {
+  margin-top: 8px;
+}
+
+.va-model-select {
+  flex: 1 1 auto;
+  height: 34px;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.va-listening {
+  border-color: #0f766e;
+  color: #0f766e;
+}
+
+.va-sending {
+  opacity: 0.7;
+}
+
+@media (max-width: 640px) {
+  .va-shell {
+    --va-safe-right: calc(8px + env(safe-area-inset-right, 0px));
+    --va-safe-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .va-panel,
+  .va-shell.va-maximized .va-panel {
+    height: min(82vh, calc(100vh - 76px));
+    width: calc(100vw - 16px);
+  }
+
+  .va-actions {
+    display: grid;
+    grid-template-columns: repeat(4, 34px);
+  }
+
+  .va-composer-row {
+    flex-wrap: wrap;
+  }
+
+  .va-model-select {
+    flex-basis: 100%;
+    font-size: 16px;
+  }
+
+  .va-input {
+    font-size: 16px;
+  }
+}
