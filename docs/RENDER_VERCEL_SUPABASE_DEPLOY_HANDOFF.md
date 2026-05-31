@@ -192,6 +192,7 @@ Add these GitHub repository secrets before running it:
 | Secret | Purpose |
 | --- | --- |
 | `RENDER_API_KEY` | Creates the Render web service |
+| `RENDER_OWNER_ID` | Render workspace/owner ID for the target account |
 | `DATABASE_URL` | Supabase Postgres connection string |
 | `FERNET_KEY` | Stable backend encryption key |
 | `VERCEL_TOKEN` | Deploys the frontend to Vercel |
