@@ -37,6 +37,7 @@ Deployment files are present in the repository:
 - `backend/requirements.txt` with `psycopg[binary]`
 - `.github/workflows/manual-platform-deploy.yml`
 - `scripts/verify-deploy.ps1`
+- `.vercelignore`
 
 ## Architecture
 
@@ -63,7 +64,7 @@ Set these on the Render web service:
 
 | Key | Value |
 | --- | --- |
-| `FERNET_KEY` | Stable Fernet key generated once and kept forever for this DB |
+| `FERNET_KEY` | Optional for first deploy if using `render.yaml` or the GitHub Actions workflow; provide the existing stable key only when reusing encrypted settings |
 | `DATABASE_URL` | Supabase Postgres Session Pooler connection string |
 | `ALLOWED_ORIGINS` | Final Vercel frontend origin, comma-separated if more than one |
 | `FINIMATIC_DISABLE_SCHEDULER` | `0` for normal app behavior, `1` only for diagnostics |
@@ -192,13 +193,15 @@ Add these GitHub repository secrets before running it:
 | Secret | Purpose |
 | --- | --- |
 | `RENDER_API_KEY` | Creates the Render web service |
-| `RENDER_OWNER_ID` | Render workspace/owner ID for the target account |
+| `RENDER_OWNER_ID` | Optional unless the API key can access multiple Render workspaces |
 | `DATABASE_URL` | Supabase Postgres connection string |
-| `FERNET_KEY` | Stable backend encryption key |
+| `FERNET_KEY` | Optional stable backend encryption key; workflow generates one if missing |
 | `VERCEL_TOKEN` | Deploys the frontend to Vercel |
-| `VERCEL_SCOPE` | Optional Vercel team/user scope |
+| `VERCEL_SCOPE` | Optional override for the Vercel team/user scope; the workflow defaults to `crce9955ce-8405s-projects` |
 
 Important: the provided Supabase personal access token is not the same as a Postgres `DATABASE_URL`. Copy the Session Pooler connection string from the Supabase dashboard, including the database password.
+
+The repository also contains `.vercelignore`, which keeps Vercel frontend deploy uploads scoped to `frontend/**` plus `vercel.json`.
 
 ## Post-Deploy Verification
 
@@ -230,10 +233,10 @@ The app defaults to dry-run in settings, so do not disable dry-run on Render Fre
 
 This environment could not complete the live Render/Vercel deployment directly:
 
-- Render CLI is not installed.
-- Vercel CLI is not installed.
-- Netlify CLI is not installed.
-- Direct REST calls to `api.render.com` and `api.vercel.com` fail with a network-level connection error.
+- Render CLI is installed at `C:\Users\rossd\AppData\Local\Programs\render-cli\render.exe`, but it is not authenticated in this session.
+- Vercel CLI is installed at `C:\Users\rossd\AppData\Roaming\npm\vercel.cmd`, but it has no cached login in this session.
+- Supabase CLI is installed at `C:\Users\rossd\AppData\Local\Programs\supabase-cli\supabase.exe`, but no access token is configured in the process environment.
+- Direct REST calls to `api.render.com`, `api.vercel.com`, and `api.supabase.com` fail with a network-level connection error.
 - Direct npm package fetches from `registry.npmjs.org` fail with a network-level connection error.
 - `winget` cannot run in this non-interactive session.
 - Chocolatey cannot access its remote package index due forbidden outbound socket access.
