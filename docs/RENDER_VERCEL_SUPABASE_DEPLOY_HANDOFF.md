@@ -36,6 +36,7 @@ Deployment files are present in the repository:
 - `netlify.toml`
 - `backend/requirements.txt` with `psycopg[binary]`
 - `.github/workflows/manual-platform-deploy.yml`
+- `scripts/set-deploy-secrets.ps1`
 - `scripts/verify-deploy.ps1`
 - `.vercelignore`
 
@@ -202,6 +203,15 @@ Add these GitHub repository secrets before running it:
 Important: the provided Supabase personal access token is not the same as a Postgres `DATABASE_URL`. Copy the Session Pooler connection string from the Supabase dashboard, including the database password.
 
 The repository also contains `.vercelignore`, which keeps Vercel frontend deploy uploads scoped to `frontend/**` plus `vercel.json`.
+
+If GitHub CLI is authenticated, the helper script can configure the repository secrets from process environment variables without printing the values:
+
+```powershell
+$env:RENDER_API_KEY = "<render api key>"
+$env:DATABASE_URL = "<supabase session pooler url>"
+$env:VERCEL_TOKEN = "<vercel token>"
+.\scripts\set-deploy-secrets.ps1
+```
 
 ## Post-Deploy Verification
 
