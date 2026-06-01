@@ -27,6 +27,7 @@ jobs:
         id: render
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_OWNER_ID: ${{ secrets.RENDER_OWNER_ID }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           FERNET_KEY: ${{ secrets.FERNET_KEY }}
           SERVICE_NAME: ${{ inputs.render_service }}
@@ -39,7 +40,7 @@ jobs:
           import urllib.error
           import urllib.request
 
-          required = ["RENDER_API_KEY", "DATABASE_URL", "FERNET_KEY"]
+          required = ["RENDER_API_KEY", "RENDER_OWNER_ID", "DATABASE_URL", "FERNET_KEY"]
           missing = [name for name in required if not os.environ.get(name)]
           if missing:
               print(f"Missing required secret(s): {', '.join(missing)}", file=sys.stderr)
@@ -65,15 +66,15 @@ jobs:
                       return response.status, json.loads(raw) if raw else None
               except urllib.error.HTTPError as exc:
                   raw = exc.read().decode("utf-8")
-                  print(raw, file=sys.stderr)
                   return exc.code, json.loads(raw) if raw else None
 
-          status, owners = request("GET", "/owners?limit=20")
-          if status != 200 or not owners:
-              print(f"Unable to list Render workspaces: HTTP {status}", file=sys.stderr)
-              sys.exit(1)
+          def render_error(label, status, body):
+              message = None
+              if isinstance(body, dict):
+                  message = body.get("message") or body.get("error")
+              print(f"{label}: HTTP {status}: {message or 'no message'}", file=sys.stderr)
 
-          owner_id = owners[0]["owner"]["id"]
+          owner_id = os.environ["RENDER_OWNER_ID"]
           service_name = os.environ["SERVICE_NAME"]
           fallback_url = f"https://{service_name}.onrender.com"
 
@@ -104,8 +105,11 @@ jobs:
           }
 
           status, created = request("POST", "/services", payload)
-          if status not in (201, 409):
-              print(f"Render service creation failed: HTTP {status}", file=sys.stderr)
+          if status == 409:
+              render_error("Render service already exists or name conflicts", status, created)
+              sys.exit(1)
+          if status != 201:
+              render_error("Render service creation failed", status, created)
               sys.exit(1)
 
           service = (created or {}).get("service", {})
