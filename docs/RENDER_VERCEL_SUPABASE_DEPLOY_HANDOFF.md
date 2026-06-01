@@ -36,6 +36,7 @@ Deployment files are present in the repository:
 - `netlify.toml`
 - `backend/requirements.txt` with `psycopg[binary]`
 - `.github/workflows/manual-platform-deploy.yml`
+- `.github/workflows/deploy-frontend-pages.yml`
 - `scripts/set-deploy-secrets.ps1`
 - `scripts/verify-deploy.ps1`
 - `.vercelignore`
@@ -150,6 +151,24 @@ ALLOWED_ORIGINS=https://<vercel-frontend>.vercel.app
 
 Then redeploy or restart the Render service.
 
+## GitHub Pages Frontend Fallback
+
+The repository contains `.github/workflows/deploy-frontend-pages.yml`, which builds the Vite frontend without platform secrets and deploys it to GitHub Pages.
+
+Expected Pages URL:
+
+```text
+https://rossdmello2.github.io/email-automation/
+```
+
+The workflow builds with:
+
+```text
+VITE_API_URL=https://finimatic-backend.onrender.com
+```
+
+This is a frontend fallback, not a backend replacement. It becomes usable after the Render backend is live and allows `https://rossdmello2.github.io` in `ALLOWED_ORIGINS`.
+
 ## Netlify Frontend Deploy
 
 A Netlify project has been created:
@@ -219,7 +238,7 @@ Minimum proof before calling deployment complete:
 
 - Render latest deploy is live.
 - `GET https://<render-backend>.onrender.com/api/health` returns `{"status":"ok"}`.
-- Vercel production URL loads the dashboard.
+- Vercel production URL, Netlify URL, or GitHub Pages fallback URL loads the dashboard.
 - Browser network calls go to the Render backend URL, not `localhost:8000`.
 - Backend CORS allows the exact Vercel origin.
 - Supabase still shows `ACTIVE_HEALTHY`.
@@ -252,5 +271,6 @@ This environment could not complete the live Render/Vercel deployment directly:
 - Chocolatey cannot access its remote package index due forbidden outbound socket access.
 - The available Vercel connector can list projects but cannot create this project here.
 - No Render MCP write tools are available in this session.
+- GitHub Pages can publish the static frontend, but the app is not fully usable until the Render backend is live.
 
 The remaining deployment action is therefore dashboard-side unless a network-capable runner or configured Render/Vercel MCP write tool becomes available.
