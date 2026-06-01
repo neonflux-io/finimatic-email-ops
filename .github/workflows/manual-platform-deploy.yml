@@ -160,10 +160,15 @@ jobs:
             scope_args=(--scope "$VERCEL_SCOPE")
           fi
 
+          vercel link \
+            --yes \
+            --project "$VERCEL_PROJECT" \
+            --token "$VERCEL_TOKEN" \
+            "${scope_args[@]}"
+
           vercel deploy \
             --prod \
             --yes \
-            --project "$VERCEL_PROJECT" \
             --token "$VERCEL_TOKEN" \
             --build-env "VITE_API_URL=$VITE_API_URL" \
             --env "VITE_API_URL=$VITE_API_URL" \
