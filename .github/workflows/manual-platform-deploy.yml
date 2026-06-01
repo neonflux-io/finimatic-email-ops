@@ -18,7 +18,7 @@ on:
       allowed_origins:
         description: "Comma-separated frontend origins for backend CORS"
         required: true
-        default: "https://finimatic-frontend.vercel.app,https://finimatic-rossdmello2.netlify.app"
+        default: "https://finimatic-frontend.vercel.app,https://finimatic-rossdmello2.netlify.app,https://rossdmello2.github.io"
 
 jobs:
   create-render-backend:
