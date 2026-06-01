@@ -4,7 +4,7 @@ This is the current deployment handoff for Finimatic using:
 
 - Supabase Postgres for persistent production data
 - Render Free for the FastAPI backend
-- Vercel for the Vite/React frontend
+- Vercel or Netlify Free for the Vite/React frontend
 
 Do not put Gmail, Groq, Gemini, SMTP, IMAP, Fernet, Render, Vercel, or database secrets in frontend code or repository files.
 
@@ -33,13 +33,16 @@ Deployment files are present in the repository:
 
 - `render.yaml`
 - `vercel.json`
+- `netlify.toml`
 - `backend/requirements.txt` with `psycopg[binary]`
+- `.github/workflows/manual-platform-deploy.yml`
+- `scripts/verify-deploy.ps1`
 
 ## Architecture
 
 ```text
 Browser
-  -> Vercel static frontend
+  -> Vercel or Netlify static frontend
   -> VITE_API_URL
   -> Render FastAPI backend
   -> DATABASE_URL
@@ -145,6 +148,57 @@ ALLOWED_ORIGINS=https://<vercel-frontend>.vercel.app
 
 Then redeploy or restart the Render service.
 
+## Netlify Frontend Deploy
+
+A Netlify project has been created:
+
+| Field | Value |
+| --- | --- |
+| Site name | `finimatic-rossdmello2` |
+| Site ID | `10af2f2a-c249-4f4d-91df-508f1c147271` |
+| Primary URL | `https://finimatic-rossdmello2.netlify.app` |
+| Project dashboard | `https://app.netlify.com/projects/finimatic-rossdmello2` |
+
+The repository contains `netlify.toml`:
+
+```toml
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+```
+
+Set this Netlify environment variable after the Render backend URL exists:
+
+```text
+VITE_API_URL=https://<render-backend>.onrender.com
+```
+
+Then trigger a Netlify deploy from the project dashboard or a network-capable CLI.
+
+## GitHub Actions Fallback
+
+The repository contains `.github/workflows/manual-platform-deploy.yml`.
+
+This workflow is intended for a GitHub-hosted runner because this local sandbox cannot reach the required platform APIs or package registries.
+
+Add these GitHub repository secrets before running it:
+
+| Secret | Purpose |
+| --- | --- |
+| `RENDER_API_KEY` | Creates the Render web service |
+| `DATABASE_URL` | Supabase Postgres connection string |
+| `FERNET_KEY` | Stable backend encryption key |
+| `VERCEL_TOKEN` | Deploys the frontend to Vercel |
+| `VERCEL_SCOPE` | Optional Vercel team/user scope |
+
+Important: the provided Supabase personal access token is not the same as a Postgres `DATABASE_URL`. Copy the Session Pooler connection string from the Supabase dashboard, including the database password.
+
 ## Post-Deploy Verification
 
 Minimum proof before calling deployment complete:
@@ -157,6 +211,7 @@ Minimum proof before calling deployment complete:
 - Supabase still shows `ACTIVE_HEALTHY`.
 - `GET /api/settings` returns fingerprints/counts only, not raw keys.
 - Frontend source and build contain no Gmail/Groq/Gemini secrets.
+- `scripts/verify-deploy.ps1` passes against the deployed backend and frontend.
 
 ## Render Free Limitation
 
@@ -176,7 +231,11 @@ This environment could not complete the live Render/Vercel deployment directly:
 
 - Render CLI is not installed.
 - Vercel CLI is not installed.
+- Netlify CLI is not installed.
 - Direct REST calls to `api.render.com` and `api.vercel.com` fail with a network-level connection error.
+- Direct npm package fetches from `registry.npmjs.org` fail with a network-level connection error.
+- `winget` cannot run in this non-interactive session.
+- Chocolatey cannot access its remote package index due forbidden outbound socket access.
 - The available Vercel connector can list projects but cannot create this project here.
 - No Render MCP write tools are available in this session.
 
