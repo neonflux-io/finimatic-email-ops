@@ -38,3 +38,6 @@ browser-evidence/
 verification_artifacts/
 frontend-token-verification.png
 docs/intelligence/build-check/
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
